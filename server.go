@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"boomconvert/adapters"
 
 	"github.com/gorilla/websocket"
 )
+
+var osStat = os.Stat
 
 type Server struct {
 	store     *Store
@@ -20,19 +24,23 @@ type Server struct {
 	registry  *adapters.Registry
 	watcher   *Watcher
 	hub       *Hub
+	converter *Converter
+	backupDir string
 	staticFS  fs.FS
 	upgrader  websocket.Upgrader
 	onFolders func()
 }
 
-func NewServer(store *Store, tools *ToolHealth, reg *adapters.Registry, w *Watcher, hub *Hub, staticFS fs.FS, onFolders func()) *Server {
+func NewServer(store *Store, tools *ToolHealth, reg *adapters.Registry, w *Watcher, hub *Hub, conv *Converter, backupDir string, staticFS fs.FS, onFolders func()) *Server {
 	return &Server{
-		store:    store,
-		tools:    tools,
-		registry: reg,
-		watcher:  w,
-		hub:      hub,
-		staticFS: staticFS,
+		store:     store,
+		tools:     tools,
+		registry:  reg,
+		watcher:   w,
+		hub:       hub,
+		converter: conv,
+		backupDir: backupDir,
+		staticFS:  staticFS,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				// Local-only server; same-origin checks are unnecessary.
@@ -55,6 +63,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/matrix", s.handleMatrix)
 	mux.HandleFunc("/api/analytics", s.handleAnalytics)
+	mux.HandleFunc("/api/backups", s.handleBackups)
+	mux.HandleFunc("/api/backups/", s.handleBackupItem)
+	mux.HandleFunc("/api/retention", s.handleRetention)
+	mux.HandleFunc("/api/retention/sweep", s.handleRetentionSweep)
 	mux.HandleFunc("/ws", s.handleWS)
 	return mux
 }
@@ -198,6 +210,150 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"total_conversions": total,
 		"bytes_saved":       saved,
+	})
+}
+
+type backupView struct {
+	ConversionRecord
+	BackupExists bool  `json:"backup_exists"`
+	BackupSize   int64 `json:"backup_size"`
+}
+
+func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	records, err := s.store.ListBackups(limit)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	out := make([]backupView, 0, len(records))
+	for _, rec := range records {
+		bv := backupView{ConversionRecord: rec}
+		if info, err := osStat(rec.BackupPath); err == nil {
+			bv.BackupExists = true
+			bv.BackupSize = info.Size()
+		}
+		out = append(out, bv)
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *Server) handleBackupItem(w http.ResponseWriter, r *http.Request) {
+	tail := strings.TrimPrefix(r.URL.Path, "/api/backups/")
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "id required", 400)
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", 400)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "restore" && r.Method == http.MethodPost {
+		s.restoreBackup(w, r, id)
+		return
+	}
+	http.Error(w, "not found", 404)
+}
+
+func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, id int64) {
+	deleteConverted := r.URL.Query().Get("delete_converted") == "true"
+	rec, err := s.store.GetConversion(id)
+	if err != nil {
+		http.Error(w, "conversion not found: "+err.Error(), 404)
+		return
+	}
+	if rec.BackupPath == "" {
+		http.Error(w, "no backup for this conversion", 400)
+		return
+	}
+
+	// Suppress watcher feedback for both paths while we mutate them.
+	s.watcher.ignoreFor(rec.SourcePath, 30*time.Second)
+	if rec.TargetPath != "" && rec.TargetPath != rec.SourcePath {
+		s.watcher.ignoreFor(rec.TargetPath, 30*time.Second)
+	}
+
+	size, err := s.converter.RestoreBackup(rec.BackupPath, rec.SourcePath, rec.TargetPath, deleteConverted)
+	if err != nil {
+		http.Error(w, "restore failed: "+err.Error(), 500)
+		return
+	}
+
+	s.hub.Broadcast(Event{Type: "backup_restored", Payload: map[string]interface{}{
+		"conversion_id":    id,
+		"restored_to":      rec.SourcePath,
+		"restored_size":    size,
+		"deleted_converted": deleteConverted,
+	}})
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":                true,
+		"restored_to":       rec.SourcePath,
+		"restored_size":     size,
+		"deleted_converted": deleteConverted,
+	})
+}
+
+type retentionWire struct {
+	MaxAgeDays int   `json:"max_age_days"`
+	MaxBytes   int64 `json:"max_bytes"`
+}
+
+func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		p := LoadRetentionPolicy(s.store)
+		writeJSON(w, 200, retentionWire{
+			MaxAgeDays: int(p.MaxAge / (24 * time.Hour)),
+			MaxBytes:   p.MaxBytes,
+		})
+	case http.MethodPut, http.MethodPost:
+		var body retentionWire
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if body.MaxAgeDays < 0 || body.MaxBytes < 0 {
+			http.Error(w, "values must be non-negative (0 disables that dimension)", 400)
+			return
+		}
+		p := RetentionPolicy{
+			MaxAge:   time.Duration(body.MaxAgeDays) * 24 * time.Hour,
+			MaxBytes: body.MaxBytes,
+		}
+		if err := s.store.SetSetting("backup_retention", p); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, 200, body)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+func (s *Server) handleRetentionSweep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	policy := LoadRetentionPolicy(s.store)
+	n, freed, err := SweepBackups(s.store, s.backupDir, policy)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.hub.Broadcast(Event{Type: "backups_swept", Payload: map[string]interface{}{
+		"deleted_count": n,
+		"bytes_freed":   freed,
+	}})
+	writeJSON(w, 200, map[string]interface{}{
+		"deleted_count": n,
+		"bytes_freed":   freed,
 	})
 }
 

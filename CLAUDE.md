@@ -26,7 +26,9 @@
 - Magic-byte detection with OOXML zip-sniffer to disambiguate DOCX/PPTX/XLSX
 - Atomic `*.bc-tmp.ext` writes
 - Central backup directory + restore-on-failure
-- HTTP REST + WebSocket dashboard (`/api/status`, `/api/tools`, `/api/folders`, `/api/history`, `/api/matrix`, `/api/analytics`, `/ws`)
+- HTTP REST + WebSocket dashboard (`/api/status`, `/api/tools`, `/api/folders`, `/api/history`, `/api/matrix`, `/api/analytics`, `/api/backups`, `/api/backups/:id/restore`, `/api/retention`, `/api/retention/sweep`, `/ws`)
+- Backup browser + one-click restore in the dashboard (with optional "also delete converted")
+- Backup retention policy: age-based + total-size cap, persisted in `settings`, swept hourly from `RunRetentionLoop`
 - Parallel tool probes with tight version-probe timeout (2.5 s)
 - LookupAll-based adapter fallback
 - 2-failure circuit breaker on UnoAdapter
@@ -40,7 +42,10 @@
 ## File map (where the logic lives)
 
 ```
-main.go              startup, wires Store + ToolHealth + Registry + Watcher + UnoManager + Server
+main.go              startup, wires Store + ToolHealth + Registry + Watcher + UnoManager + Converter + retention loop + Server
+retention.go         RetentionPolicy, SweepBackups (age + size-cap pruning), RunRetentionLoop (hourly tick)
+retention_test.go    unit tests for retention sweeper (age, size cap, missing dir, zero policy)
+watcher_test.go      unit tests for detectFormatWithFallback, sniffOOXML disambiguation, normalizeExt, tempSibling
 paths.go             OS-aware config + backup directory resolution
 tool_health.go       parallel probes for magick/soffice/pdf2docx/unoserver/poppler
                      + prependDiscoveredDirsToPath so adapters can call by short name
@@ -52,6 +57,7 @@ watcher.go           fsnotify subscription, rename correlation (REMOVE/RENAME + 
 converter.go         orchestrates a single conversion: backup -> LookupAll loop with fallback
                      -> atomic finalize -> record in DB -> broadcast event
                      tempSibling() preserves the target extension so format-by-ext tools work
+                     RestoreBackup() copies a backup back to source path via atomic temp-sibling write
 server.go            HTTP routes + WS upgrade
 adapters/registry.go Adapter interface, Registry, LookupAll
 adapters/image.go    ImageMagickAdapter (any-to-any 7 image formats)
@@ -59,6 +65,7 @@ adapters/document.go LibreOfficeAdapter (soffice --headless --convert-to in isol
                      Pdf2DocxAdapter (python -m pdf2docx convert)
 adapters/uno.go      UnoManager (lazy-start unoserver, idle-timeout teardown, circuit breaker),
                      UnoAdapter (proxy through manager; tight 45s inner timeout)
+adapters/image_test.go ImageMagickAdapter unit + integration tests (round-trip skips when magick absent)
 frontend/index.html  dashboard markup (embedded via go:embed in main.go)
 frontend/style.css   dark glassmorphic theme
 frontend/app.js      polls /api/*, listens on /ws, handles folder/tool actions
@@ -86,21 +93,19 @@ frontend/app.js      polls /api/*, listens on /ws, handles folder/tool actions
 ## What to do next (priority-ordered)
 
 ### High value, low risk
-1. **Smoke-test PDF → DOCX end-to-end.** Pdf2DocxAdapter is wired but unexercised. Should be trivial: drop a PDF into the Magic Folder, rename to `.docx`, verify a usable DOCX is produced.
-2. **Backup browser + restore in the UI.** API endpoints (`/api/backups`, `/api/backups/:id/restore`) are mentioned in the implementation plan but not yet implemented. Add them and surface in `frontend/app.js`.
-3. **Run the dashboard in a browser interactively.** Have the user click through the Tool Health card, folder manager, activity feed. Surface any UI rough edges.
+1. **Smoke-test PDF → DOCX end-to-end.** Pdf2DocxAdapter is wired but unexercised. Drop a PDF into the Magic Folder, rename to `.docx`, verify a usable DOCX is produced. **Needs a human at the keyboard.**
+2. **Run the dashboard in a browser interactively.** Click through Tool Health, folder manager, activity feed, **backup browser + restore + retention controls (new)**. Surface UI rough edges. **Needs a human at the keyboard.**
 
 ### Medium value
-4. **Tests.** `watcher_test.go` for rename correlation, compound extensions, signature mismatches. `adapters/image_test.go` for round-trip image conversions (skip when `magick` absent).
-5. **Antivirus mitigation guidance.** If `unoserver` consistently dies on a user's machine, surface a banner in the dashboard pointing at the AV-exclusion troubleshooting in README.
-6. **PPTX → PDF live test.** LibreOffice adapter supports it but it's never been exercised live.
-7. **Conversion retention / cleanup policy for backups.** Right now backups grow forever. Add a setting (e.g. "keep last N days" or "keep last N GB") and a cleanup goroutine.
+3. **Antivirus mitigation guidance.** If `unoserver` consistently dies on a user's machine, surface a banner in the dashboard pointing at the AV-exclusion troubleshooting in README. Hook point: detect when the UnoAdapter circuit breaker has tripped (see `adapters/uno.go`) and emit a hub event the dashboard can render.
+4. **PPTX → PDF live test.** LibreOffice adapter supports it but it's never been exercised live.
+5. **Rename-correlation integration tests.** The current `watcher_test.go` only covers pure helpers. A real fsnotify-driven test that simulates RENAME→CREATE pairs would catch regressions in cross-directory renames + compound-extension correlation.
 
 ### Lower priority
-8. **Windows installer / single-click setup.** Inno Setup or MSI that bundles ImageMagick / LibreOffice install commands.
-9. **Run as a Windows service.** Use `golang.org/x/sys/windows/svc` so BoomConvert starts on login without showing a console window.
-10. **libvips swap for images.** ImageMagick is fine, but `vips` is ~4-8x faster on most operations and ~30 MB vs ~50 MB. Possible adapter variant.
-11. **More format families.** Modern photo formats (HEIC, AVIF via ImageMagick + libheif), ebooks (Calibre), archives (7-Zip). Discussed and deferred from v1.
+6. **Windows installer / single-click setup.** Inno Setup or MSI that bundles ImageMagick / LibreOffice install commands.
+7. **Run as a Windows service.** Use `golang.org/x/sys/windows/svc` so BoomConvert starts on login without showing a console window.
+8. **libvips swap for images.** ImageMagick is fine, but `vips` is ~4-8x faster on most operations and ~30 MB vs ~50 MB. Possible adapter variant.
+9. **More format families.** Modern photo formats (HEIC, AVIF via ImageMagick + libheif), ebooks (Calibre), archives (7-Zip). Discussed and deferred from v1.
 
 ### Avoid / explicitly deferred
 - Cloud APIs for the DOCX↔PPTX hard cases. Breaks the local-first principle.

@@ -107,13 +107,14 @@ func main() {
 	syncWatches()
 
 	go watcher.Run(ctx)
+	go RunRetentionLoop(ctx, store, paths.BackupDir, 1*time.Hour)
 
 	staticFS, err := fs.Sub(embeddedFrontend, "frontend")
 	if err != nil {
 		log.Fatalf("frontend embed: %v", err)
 	}
 
-	srv := NewServer(store, tools, registry, watcher, hub, staticFS, syncWatches)
+	srv := NewServer(store, tools, registry, watcher, hub, converter, paths.BackupDir, staticFS, syncWatches)
 
 	httpSrv := &http.Server{
 		Addr:    "127.0.0.1:8001",

@@ -120,6 +120,45 @@ func (s *Store) ListConversions(limit int) ([]ConversionRecord, error) {
 	return out, rows.Err()
 }
 
+// GetConversion returns a single conversion record by id.
+func (s *Store) GetConversion(id int64) (*ConversionRecord, error) {
+	row := s.db.QueryRow(`SELECT id,source_path,target_path,source_format,target_format,
+		source_size,target_size,status,error,started_at,finished_at,backup_path
+		FROM conversions WHERE id=?`, id)
+	var c ConversionRecord
+	if err := row.Scan(&c.ID, &c.SourcePath, &c.TargetPath, &c.SourceFormat, &c.TargetFormat,
+		&c.SourceSize, &c.TargetSize, &c.Status, &c.Error, &c.StartedAt, &c.FinishedAt, &c.BackupPath); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// ListBackups returns the most recent conversions that have a non-empty
+// backup_path, regardless of conversion status (failed conversions also keep
+// backups since the original was restored from one).
+func (s *Store) ListBackups(limit int) ([]ConversionRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`SELECT id,source_path,target_path,source_format,target_format,
+		source_size,target_size,status,error,started_at,finished_at,backup_path
+		FROM conversions WHERE backup_path <> '' ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConversionRecord
+	for rows.Next() {
+		var c ConversionRecord
+		if err := rows.Scan(&c.ID, &c.SourcePath, &c.TargetPath, &c.SourceFormat, &c.TargetFormat,
+			&c.SourceSize, &c.TargetSize, &c.Status, &c.Error, &c.StartedAt, &c.FinishedAt, &c.BackupPath); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) AnalyticsTotals() (totalConversions int64, bytesSaved int64, err error) {
 	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(source_size - target_size),0)
 		FROM conversions WHERE status='completed'`)

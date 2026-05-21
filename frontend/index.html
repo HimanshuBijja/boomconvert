@@ -51,6 +51,21 @@
 
   <section class="card">
     <div class="card-head">
+      <h2>Backups</h2>
+      <span class="muted">Restore any conversion's original file</span>
+    </div>
+    <div class="retention">
+      <label>Keep for <input id="ret-days" type="number" min="0" step="1"> days</label>
+      <label>Cap at <input id="ret-mb" type="number" min="0" step="64"> MB</label>
+      <button id="ret-save" class="btn-ghost">Save</button>
+      <button id="ret-sweep" class="btn-ghost">Sweep now</button>
+      <span id="ret-status" class="muted"></span>
+    </div>
+    <ul id="backups-list" class="backups-list"></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
       <h2>Activity</h2>
       <div class="analytics">
         <span><span id="ana-total">0</span> conversions</span>

@@ -179,6 +179,45 @@ func (c *Converter) restoreFromBackup(backupPath, originalPath, targetPath strin
 	_ = out.Close()
 }
 
+// RestoreBackup copies backupPath back to originalPath and (optionally) removes
+// the converted target file. Returns the size of the restored file.
+func (c *Converter) RestoreBackup(backupPath, originalPath, convertedPath string, deleteConverted bool) (int64, error) {
+	if _, err := os.Stat(backupPath); err != nil {
+		return 0, fmt.Errorf("backup not found: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
+		return 0, err
+	}
+	in, err := os.Open(backupPath)
+	if err != nil {
+		return 0, err
+	}
+	defer in.Close()
+	tmp := tempSibling(originalPath)
+	out, err := os.Create(tmp)
+	if err != nil {
+		return 0, err
+	}
+	n, err := io.Copy(out, in)
+	if err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return 0, err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return 0, err
+	}
+	if err := os.Rename(tmp, originalPath); err != nil {
+		_ = os.Remove(tmp)
+		return 0, err
+	}
+	if deleteConverted && convertedPath != "" && convertedPath != originalPath {
+		_ = os.Remove(convertedPath)
+	}
+	return n, nil
+}
+
 func conversionTimeoutFor(src, dst string) time.Duration {
 	if isImage(src) && isImage(dst) {
 		return 60 * time.Second

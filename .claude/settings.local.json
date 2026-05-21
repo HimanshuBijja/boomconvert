@@ -13,7 +13,8 @@
       "Bash(unzip -l /c/Users/bijja/BoomConvert-Magic/sample.docx)",
       "Bash(mv /tmp/sniff_test.go /tmp/sniff_check.go)",
       "Bash(go run *)",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "Bash(go test *)"
     ]
   }
 }
