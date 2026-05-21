@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod *)",
+      "Bash(go get *)",
+      "Bash(go build *)",
+      "Read(//c/Program Files/**)",
+      "Bash(python -c \"import importlib.metadata; print\\(importlib.metadata.version\\('pdf2docx'\\)\\)\")",
+      "Bash(mkdir -p /c/Users/bijja/BoomConvert-Magic)",
+      "Bash(magick -size 200x200 xc:steelblue -fill white -gravity center -pointsize 20 -annotate +0+0 'BoomConvert Test' /c/Users/bijja/BoomConvert-Magic/test.jpg)",
+      "Read(//c/Users/bijja/BoomConvert-Magic//**)",
+      "Bash(tasklist //FI \"IMAGENAME eq boomconvert.exe\")",
+      "Bash(unzip -l /c/Users/bijja/BoomConvert-Magic/sample.docx)",
+      "Bash(mv /tmp/sniff_test.go /tmp/sniff_check.go)",
+      "Bash(go run *)",
+      "Bash(pip show *)"
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BoomConvert</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">BC</span>
+    <div>
+      <div class="title">BoomConvert</div>
+      <div class="subtitle">Rename to convert</div>
+    </div>
+  </div>
+  <div class="status">
+    <span id="status-pill" class="pill pill-on">Active</span>
+    <button id="toggle-btn" class="btn">Pause</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="card-head">
+      <h2>Tool Health</h2>
+      <button id="refresh-tools" class="btn-ghost">Re-probe</button>
+    </div>
+    <div id="tools-grid" class="tools-grid"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Magic Folders</h2>
+    </div>
+    <div class="folders-add">
+      <input id="folder-input" type="text" placeholder="C:\Users\you\BoomConvert-Magic">
+      <button id="folder-add" class="btn">Add folder</button>
+    </div>
+    <ul id="folders-list" class="folders-list"></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Conversion Matrix</h2>
+      <span class="muted">Rules active given currently installed tools</span>
+    </div>
+    <div id="matrix-grid" class="matrix-grid"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Activity</h2>
+      <div class="analytics">
+        <span><span id="ana-total">0</span> conversions</span>
+        <span><span id="ana-saved">0 B</span> saved</span>
+      </div>
+    </div>
+    <ul id="activity-list" class="activity-list"></ul>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
